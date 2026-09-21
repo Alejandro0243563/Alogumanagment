@@ -23,7 +23,7 @@ jobs:
           d=webdriver.Chrome(options=opts);w=WebDriverWait(d,30)
           try:
             for pubdate in ["2026-08-14","2026-06-04"]:
-              d.get(BASE);w.until(lambda x:x.execute_script("return document.readyState")=="complete");time.sleep(2)
+              d.get(BASE);w.until(lambda x:x.execute_script("return document.readyState")=="complete");w.until(lambda x: len(x.find_elements(By.NAME,"FAcuerdo"))>0)
               f=d.find_element(By.NAME,"FAcuerdo");f.clear();f.send_keys(pubdate)
               Select(d.find_element(By.NAME,"Sala")).select_by_value("21")
               d.find_element(By.CSS_SELECTOR,'input[type="submit"][value="Filtrar"]').click();time.sleep(3)
