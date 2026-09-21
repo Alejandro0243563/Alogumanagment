@@ -1,0 +1,88 @@
+name: TJAJAL Probe
+on:
+  push:
+    branches: [main]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe official TJAJAL bulletin
+        shell: bash
+        run: |
+          python -m pip install --quiet requests beautifulsoup4
+          python - <<'PY'
+          import requests,re,json
+          from bs4 import BeautifulSoup
+          from urllib.parse import urljoin
+          BASE="https://tjajal.gob.mx/boletines"
+          s=requests.Session();s.headers.update({"User-Agent":"Mozilla/5.0 Chrome/152 Safari/537.36"})
+          r=s.get(BASE,timeout=30);print("BASE",r.status_code,r.url,len(r.text));r.raise_for_status()
+          soup=BeautifulSoup(r.text,"html.parser");forms=soup.find_all("form");print("FORMS",len(forms))
+          for i,f in enumerate(forms):
+            print("FORM",i,"METHOD",f.get("method"),"ACTION",f.get("action"))
+            for x in f.find_all(["input","select","button"]):
+              print("FIELD",x.name,"NAME",repr(x.get("name")),"TYPE",repr(x.get("type")),"VALUE",repr(x.get("value")),"PLACEHOLDER",repr(x.get("placeholder")))
+              if x.name=="select":
+                for o in x.find_all("option"):
+                  print("OPTION",repr(x.get("name")),repr(o.get("value")),repr(" ".join(o.stripped_strings)))
+          form=next((f for f in forms if "expediente" in (" ".join(f.stripped_strings)+" "+" ".join((x.get("name") or "")+" "+(x.get("placeholder") or "") for x in f.find_all(["input","select"]))).lower()),None)
+          if not form: raise SystemExit("NO SEARCH FORM")
+          method=(form.get("method") or "get").lower();action=urljoin(BASE,form.get("action") or BASE)
+          ins=form.find_all("input");sels=form.find_all("select")
+          hidden={x.get("name"):x.get("value") for x in ins if (x.get("type") or "").lower()=="hidden" and x.get("name") and x.get("value") is not None}
+          exp=[x.get("name") for x in ins if x.get("name") and "exp" in (((x.get("name") or "")+" "+(x.get("placeholder") or "")).lower()) and (x.get("type") or "text").lower() not in ("hidden","submit","button")]
+          actor=[x.get("name") for x in ins if x.get("name") and "actor" in (((x.get("name") or "")+" "+(x.get("placeholder") or "")).lower())]
+          dem=[x.get("name") for x in ins if x.get("name") and "demand" in (((x.get("name") or "")+" "+(x.get("placeholder") or "")).lower())]
+          year=[x.get("name") for x in ins if x.get("name") and any(k in (((x.get("name") or "")+" "+(x.get("placeholder") or "")).lower()) for k in ["año","anio","year"])]
+          patr=[]
+          for sel in sels:
+            for o in sel.find_all("option"):
+              t=" ".join(o.stripped_strings)
+              if "PATRIMON" in t.upper():patr.append((sel.get("name"),o.get("value"),t))
+          print("DISCOVERED",json.dumps({"method":method,"action":action,"exp":exp,"actor":actor,"dem":dem,"year":year,"patr":patr,"hidden":hidden},ensure_ascii=False))
+          def req(p):
+            return s.post(action,data=p,timeout=45) if method=="post" else s.get(action,params=p,timeout=45)
+          def rows(html):
+            q=BeautifulSoup(html,"html.parser");out=[]
+            for tr in q.find_all("tr"):
+              c=[" ".join(td.stripped_strings) for td in tr.find_all(["td","th"])]
+              if c:out.append((c,tr))
+            return q,out
+          targets=[
+            {"d":"0013/2026","a":"SANTIAGO CALDERON CHAVEZ","de":"AYUNTAMIENTO DE GUADALAJARA"},
+            {"d":"0012/2026","a":"METAL Y PANEL INDUSTRIAL DEPOT","de":"SECRETARIA DE SEGURIDAD DEL ESTADO DE JALISCO"}
+          ]
+          attempts=[]
+          for T in targets:
+            n,y=T["d"].split("/");vars=list(dict.fromkeys([T["d"],str(int(n))+"/"+y,n,str(int(n))]))
+            for ef in exp:
+              for sn,sv,st in patr:
+                for v in vars:
+                  p=dict(hidden);p[ef]=v;p[sn]=sv
+                  if year and "/" not in v:p[year[0]]=y
+                  attempts.append(("CATEGORY",T,p,{"exp_field":ef,"select":sn,"value":sv,"text":st,"variant":v}))
+              for af in actor:
+                p=dict(hidden);p[ef]=T["d"];p[af]=T["a"];attempts.append(("ACTOR",T,p,{"exp_field":ef,"actor_field":af}))
+              for df in dem:
+                p=dict(hidden);p[ef]=T["d"];p[df]=T["de"];attempts.append(("DEMANDADO",T,p,{"exp_field":ef,"demand_field":df}))
+          seen=set()
+          for kind,T,p,meta in attempts:
+            key=json.dumps(p,sort_keys=True,default=str)
+            if key in seen:continue
+            seen.add(key)
+            try:rr=req(p)
+            except Exception as e:print("QUERY_ERR",kind,T["d"],json.dumps(p,ensure_ascii=False),repr(e));continue
+            q,rs=rows(rr.text);n,y=T["d"].split("/");pat=re.compile(r"(?<!\d)0*"+str(int(n))+r"/"+y+r"(?!\d)")
+            hits=[(c,tr) for c,tr in rs if pat.search(" | ".join(c))]
+            if hits:
+              print("\n=== HIT ===");print("KIND",kind,"TARGET",T["d"]);print("META",json.dumps(meta,ensure_ascii=False));print("PARAMS",json.dumps(p,ensure_ascii=False));print("URL",rr.url,"STATUS",rr.status_code)
+              for c,tr in hits:
+                txt=" | ".join(c);print("ROW",json.dumps(c,ensure_ascii=False));print("VALID_RP","SSUP-RESPONSABILIDAD PATRIMONIAL" in txt.upper());print("ROWHTML",str(tr)[:12000])
+                for a in tr.find_all("a",href=True):
+                  href=urljoin(rr.url,a["href"]);print("LINK",href)
+                  try:
+                    dr=s.get(href,timeout=30);ds=BeautifulSoup(dr.text,"html.parser");print("DETAIL",dr.status_code,dr.url," ".join(ds.stripped_strings)[:15000])
+                  except Exception as e:print("DETAIL_ERR",repr(e))
+          print("ATTEMPTS",len(seen))
+          PY
