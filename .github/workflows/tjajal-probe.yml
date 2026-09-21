@@ -2,6 +2,9 @@ name: TJAJAL Probe
 on:
   push:
     branches: [main]
+  issues:
+    types: [opened, edited, reopened]
+  workflow_dispatch:
 jobs:
   probe:
     runs-on: ubuntu-latest
