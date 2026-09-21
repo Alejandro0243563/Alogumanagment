@@ -8,79 +8,36 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Open exact Responsabilidad Patrimonial rows
+      - name: Test date plus patrimonial category route
         shell: bash
         run: |
           python -m pip install --quiet selenium
           python - <<'PY'
-          import time,re,json
+          import time
           from selenium import webdriver
           from selenium.webdriver.chrome.options import Options
           from selenium.webdriver.common.by import By
           from selenium.webdriver.support.ui import WebDriverWait, Select
-
           BASE="https://tjajal.gob.mx/boletines"
-          opts=Options()
-          opts.add_argument("--headless=new")
-          opts.add_argument("--no-sandbox")
-          opts.add_argument("--disable-dev-shm-usage")
-          opts.add_argument("--window-size=1600,1600")
-          d=webdriver.Chrome(options=opts)
-          w=WebDriverWait(d,30)
-
-          def load():
-            d.get(BASE)
-            w.until(lambda x: x.execute_script("return document.readyState")=="complete")
-            time.sleep(2)
-
-          def find_input(name):
-            return w.until(lambda x: x.find_element(By.NAME,name))
-
-          def query(docket):
-            load()
-            exp=find_input("NExpediente")
-            exp.clear()
-            exp.send_keys(docket)
-            sala=Select(d.find_element(By.NAME,"Sala"))
-            sala.select_by_value("21")
-            print("QUERY",docket,"Sala=21",sala.first_selected_option.text)
-            d.find_element(By.CSS_SELECTOR,'input[type="submit"][value="Filtrar"]').click()
-            time.sleep(3)
-            print("AFTER_URL",d.current_url)
-            body=d.find_element(By.TAG_NAME,"body").text
-            print("BODY_TAIL",body[-6000:])
-            rows=d.find_elements(By.CSS_SELECTOR,"td.tdtoggle")
-            print("ROW_COUNT",len(rows))
-            for td in rows:
-              print("ROW_ATTR",repr(td.get_attribute("expediente")),repr(td.get_attribute("sala")),"TEXT",repr(td.text[:1000]))
-            normalized=docket.lstrip("0")
-            exact=[]
-            for td in rows:
-              expv=td.get_attribute("expediente") or ""
-              salav=(td.get_attribute("sala") or "").strip().upper()
-              if expv.lstrip("0")==normalized and salav=="PLENORP":
-                exact.append(td)
-            print("EXACT_COUNT",len(exact))
-            for idx,td in enumerate(exact):
-              print("EXACT_BEFORE",idx,td.get_attribute("outerHTML")[:10000])
-              try:
-                d.execute_script("arguments[0].scrollIntoView({block:'center'});",td)
-                d.execute_script("arguments[0].click();",td)
-                # wait until the row's collapse gets content or new visible descendant text
-                for _ in range(20):
-                  time.sleep(0.5)
-                  html=td.get_attribute("outerHTML")
-                  txt=td.text
-                  if len(txt)>80 or ("collapse show" in html and len(html)>1200):
-                    break
-                print("EXACT_AFTER_TEXT",idx,repr(td.text[:12000]))
-                print("EXACT_AFTER_HTML",idx,td.get_attribute("outerHTML")[:20000])
-              except Exception as e:
-                print("CLICK_ERROR",idx,repr(e))
-
+          opts=Options();opts.add_argument("--headless=new");opts.add_argument("--no-sandbox");opts.add_argument("--disable-dev-shm-usage");opts.add_argument("--window-size=1600,1400")
+          d=webdriver.Chrome(options=opts);w=WebDriverWait(d,30)
           try:
-            query("13/2026")
-            query("12/2026")
-          finally:
-            d.quit()
+            for pubdate in ["2026-08-14","2026-06-04"]:
+              d.get(BASE);w.until(lambda x:x.execute_script("return document.readyState")=="complete");time.sleep(2)
+              f=d.find_element(By.NAME,"FAcuerdo");f.clear();f.send_keys(pubdate)
+              Select(d.find_element(By.NAME,"Sala")).select_by_value("21")
+              d.find_element(By.CSS_SELECTOR,'input[type="submit"][value="Filtrar"]').click();time.sleep(3)
+              print("DATE_QUERY",pubdate,"Sala=21")
+              rows=d.find_elements(By.CSS_SELECTOR,"td.tdtoggle")
+              exact=[]
+              for td in rows:
+                sala=(td.get_attribute("sala") or "").strip().upper()
+                if sala=="PLENORP":
+                  exact.append(td)
+                  print("PLENORP_ROW",repr(td.get_attribute("expediente")),repr(td.text))
+              print("PLENORP_COUNT",len(exact))
+              for td in exact:
+                d.execute_script("arguments[0].click();",td);time.sleep(1)
+                print("PLENORP_DETAIL",repr(td.text[:5000]))
+          finally:d.quit()
           PY
