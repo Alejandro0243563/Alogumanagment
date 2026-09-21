@@ -8,196 +8,79 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Probe official TJAJAL bulletin with real browser
+      - name: Open exact Responsabilidad Patrimonial rows
         shell: bash
         run: |
-          python -m pip install --quiet selenium beautifulsoup4
+          python -m pip install --quiet selenium
           python - <<'PY'
-          import json,re,time
+          import time,re,json
           from selenium import webdriver
           from selenium.webdriver.chrome.options import Options
           from selenium.webdriver.common.by import By
           from selenium.webdriver.support.ui import WebDriverWait, Select
-          from selenium.webdriver.support import expected_conditions as EC
 
-          URL="https://tjajal.gob.mx/boletines"
+          BASE="https://tjajal.gob.mx/boletines"
           opts=Options()
           opts.add_argument("--headless=new")
           opts.add_argument("--no-sandbox")
           opts.add_argument("--disable-dev-shm-usage")
-          opts.add_argument("--window-size=1600,1400")
+          opts.add_argument("--window-size=1600,1600")
           d=webdriver.Chrome(options=opts)
-          wait=WebDriverWait(d,30)
-          try:
-            d.get(URL)
-            wait.until(lambda x: x.execute_script("return document.readyState")=="complete")
-            time.sleep(4)
-            print("TITLE",d.title)
-            print("URL",d.current_url)
-            print("BODY_TEXT_START",d.find_element(By.TAG_NAME,"body").text[:7000])
+          w=WebDriverWait(d,30)
 
-            print("\n=== CONTROLS ===")
-            for i,e in enumerate(d.find_elements(By.CSS_SELECTOR,"input,select,button")):
+          def load():
+            d.get(BASE)
+            w.until(lambda x: x.execute_script("return document.readyState")=="complete")
+            time.sleep(2)
+
+          def find_input(name):
+            return w.until(lambda x: x.find_element(By.NAME,name))
+
+          def query(docket):
+            load()
+            exp=find_input("NExpediente")
+            exp.clear()
+            exp.send_keys(docket)
+            sala=Select(d.find_element(By.NAME,"Sala"))
+            sala.select_by_value("21")
+            print("QUERY",docket,"Sala=21",sala.first_selected_option.text)
+            d.find_element(By.CSS_SELECTOR,'input[type="submit"][value="Filtrar"]').click()
+            time.sleep(3)
+            print("AFTER_URL",d.current_url)
+            body=d.find_element(By.TAG_NAME,"body").text
+            print("BODY_TAIL",body[-6000:])
+            rows=d.find_elements(By.CSS_SELECTOR,"td.tdtoggle")
+            print("ROW_COUNT",len(rows))
+            for td in rows:
+              print("ROW_ATTR",repr(td.get_attribute("expediente")),repr(td.get_attribute("sala")),"TEXT",repr(td.text[:1000]))
+            normalized=docket.lstrip("0")
+            exact=[]
+            for td in rows:
+              expv=td.get_attribute("expediente") or ""
+              salav=(td.get_attribute("sala") or "").strip().upper()
+              if expv.lstrip("0")==normalized and salav=="PLENORP":
+                exact.append(td)
+            print("EXACT_COUNT",len(exact))
+            for idx,td in enumerate(exact):
+              print("EXACT_BEFORE",idx,td.get_attribute("outerHTML")[:10000])
               try:
-                print("CONTROL",i,e.tag_name,
-                      "type=",repr(e.get_attribute("type")),
-                      "name=",repr(e.get_attribute("name")),
-                      "id=",repr(e.get_attribute("id")),
-                      "placeholder=",repr(e.get_attribute("placeholder")),
-                      "value=",repr(e.get_attribute("value")),
-                      "text=",repr(e.text),
-                      "outer=",e.get_attribute("outerHTML")[:1500])
-                if e.tag_name=="select":
-                  print("OPTIONS",[(o.get_attribute("value"),o.text) for o in e.find_elements(By.TAG_NAME,"option")])
-              except Exception as ex: print("CONTROL_ERR",i,repr(ex))
+                d.execute_script("arguments[0].scrollIntoView({block:'center'});",td)
+                d.execute_script("arguments[0].click();",td)
+                # wait until the row's collapse gets content or new visible descendant text
+                for _ in range(20):
+                  time.sleep(0.5)
+                  html=td.get_attribute("outerHTML")
+                  txt=td.text
+                  if len(txt)>80 or ("collapse show" in html and len(html)>1200):
+                    break
+                print("EXACT_AFTER_TEXT",idx,repr(td.text[:12000]))
+                print("EXACT_AFTER_HTML",idx,td.get_attribute("outerHTML")[:20000])
+              except Exception as e:
+                print("CLICK_ERROR",idx,repr(e))
 
-            print("\n=== LABELS ===")
-            for i,e in enumerate(d.find_elements(By.TAG_NAME,"label")):
-              print("LABEL",i,repr(e.text),"for=",repr(e.get_attribute("for")),"outer=",e.get_attribute("outerHTML")[:1000])
-
-            print("\n=== SELECT-LIKE ELEMENTS ===")
-            for css in ["[role=combobox]","[role=listbox]",".select2-selection",".multiselect",".v-select"]:
-              els=d.find_elements(By.CSS_SELECTOR,css)
-              for i,e in enumerate(els):
-                print("SELECTLIKE",css,i,repr(e.text),e.get_attribute("outerHTML")[:2000])
-
-            # save identifiers inferred from rendered DOM
-            controls=[]
-            for e in d.find_elements(By.CSS_SELECTOR,"input,select"):
-              controls.append({
-                "tag":e.tag_name,"name":e.get_attribute("name"),"id":e.get_attribute("id"),
-                "ph":e.get_attribute("placeholder"),"type":e.get_attribute("type"),
-                "value":e.get_attribute("value"),
-                "options":[(o.get_attribute("value"),o.text) for o in e.find_elements(By.TAG_NAME,"option")] if e.tag_name=="select" else []
-              })
-            print("CONTROLS_JSON",json.dumps(controls,ensure_ascii=False))
-
-            # Query helper via UI: identify expediente input by placeholder/id/name or proximity.
-            exp_candidates=[]
-            for e in d.find_elements(By.CSS_SELECTOR,"input"):
-              blob=" ".join([e.get_attribute("name") or "",e.get_attribute("id") or "",e.get_attribute("placeholder") or ""]).lower()
-              if "exp" in blob:
-                exp_candidates.append(e)
-            print("EXP_COUNT",len(exp_candidates))
-
-            # Identify select containing Patrimonial.
-            patr_selects=[]
-            for e in d.find_elements(By.CSS_SELECTOR,"select"):
-              opts_txt=[o.text for o in e.find_elements(By.TAG_NAME,"option")]
-              if any("PATRIMON" in x.upper() for x in opts_txt):
-                patr_selects.append(e)
-                print("PATR_SELECT",e.get_attribute("name"),e.get_attribute("id"),[(o.get_attribute("value"),o.text) for o in e.find_elements(By.TAG_NAME,"option") if "PATRIMON" in o.text.upper()])
-
-            def normalize(s): return re.sub(r"\s+"," ",s or "").strip().upper()
-            def collect_target_rows(docket):
-              rows=[]
-              n,y=docket.split("/")
-              pat=re.compile(r"(?<!\d)0*"+str(int(n))+r"/"+y+r"(?!\d)")
-              for tr in d.find_elements(By.CSS_SELECTOR,"tr"):
-                txt=normalize(tr.text)
-                if pat.search(txt):
-                  rows.append((tr,txt))
-              return rows
-
-            def clear_all():
-              for e in d.find_elements(By.CSS_SELECTOR,"input"):
-                try:
-                  if e.is_enabled() and e.is_displayed() and (e.get_attribute("type") or "text").lower() in ("text","search","number"):
-                    e.clear()
-                except: pass
-              for s in d.find_elements(By.CSS_SELECTOR,"select"):
-                try:
-                  Select(s).select_by_index(0)
-                except: pass
-
-            def click_search():
-              # Prefer button whose text suggests search/consult.
-              for b in d.find_elements(By.CSS_SELECTOR,"button,input[type=submit]"):
-                txt=normalize((b.text or "")+" "+(b.get_attribute("value") or ""))
-                if any(k in txt for k in ["BUSCAR","CONSULTAR","FILTRAR"]):
-                  print("CLICK_SEARCH",txt,b.get_attribute("outerHTML")[:1000])
-                  b.click(); return True
-              return False
-
-            targets=[
-              ("0013/2026",["SANTIAGO","CALDERON","AGUA PASEO","GUADALAJARA"]),
-              ("0012/2026",["METAL","PANEL","INDUSTRIAL","SEGURIDAD"])
-            ]
-
-            for docket,tokens in targets:
-              print("\n##### TARGET",docket,"#####")
-              clear_all()
-              # reacquire after possible DOM changes
-              exp_candidates=[]
-              for e in d.find_elements(By.CSS_SELECTOR,"input"):
-                blob=" ".join([e.get_attribute("name") or "",e.get_attribute("id") or "",e.get_attribute("placeholder") or ""]).lower()
-                if "exp" in blob: exp_candidates.append(e)
-              patr_selects=[]
-              for e in d.find_elements(By.CSS_SELECTOR,"select"):
-                opts_txt=[o.text for o in e.find_elements(By.TAG_NAME,"option")]
-                if any("PATRIMON" in x.upper() for x in opts_txt): patr_selects.append(e)
-
-              if not exp_candidates:
-                print("NO_EXP_INPUT"); continue
-              exp=exp_candidates[0]
-              exp.clear();exp.send_keys(docket)
-              print("SET_EXP",exp.get_attribute("name"),exp.get_attribute("id"),docket)
-
-              if patr_selects:
-                ps=patr_selects[0]
-                sel=Select(ps)
-                matching=[o for o in sel.options if "PATRIMON" in o.text.upper()]
-                print("PATR_OPTIONS_MATCH",[(o.get_attribute("value"),o.text) for o in matching])
-                # try each patrimonial option, prioritizing exact responsibility category / Sala Superior-like entries
-                def score(o):
-                  t=normalize(o.text)
-                  return (10 if "RESPONSABILIDAD" in t else 0)+(6 if "PATRIMONIAL" in t else 0)+(4 if "SUPERIOR" in t or "SSUP" in t else 0)+(2 if "PLENO" in t else 0)
-                matching=sorted(matching,key=score,reverse=True)
-                for opt in matching:
-                  # reset docket each option if page reload occurred
-                  try:
-                    exp=next(e for e in d.find_elements(By.CSS_SELECTOR,"input") if "exp" in " ".join([e.get_attribute("name") or "",e.get_attribute("id") or "",e.get_attribute("placeholder") or ""]).lower())
-                    exp.clear();exp.send_keys(docket)
-                    ps=next(s for s in d.find_elements(By.CSS_SELECTOR,"select") if any("PATRIMON" in o.text.upper() for o in s.find_elements(By.TAG_NAME,"option")))
-                    sel=Select(ps)
-                    value=opt.get_attribute("value"); text=opt.text
-                    if value: sel.select_by_value(value)
-                    else: sel.select_by_visible_text(text)
-                    print("TRY_OPTION",repr(value),repr(text))
-                    if not click_search():
-                      print("NO_SEARCH_BUTTON"); break
-                    time.sleep(3)
-                    print("AFTER_URL",d.current_url)
-                    print("RESULT_BODY",d.find_element(By.TAG_NAME,"body").text[-9000:])
-                    hits=collect_target_rows(docket)
-                    print("HIT_COUNT",len(hits))
-                    for tr,txt in hits:
-                      print("ROW_TEXT",txt)
-                      print("ROW_HTML",tr.get_attribute("outerHTML")[:14000])
-                      print("VALID_RP","SSUP-RESPONSABILIDAD PATRIMONIAL" in txt)
-                      for a in tr.find_elements(By.TAG_NAME,"a"):
-                        href=a.get_attribute("href")
-                        if href: print("ROW_LINK",href)
-                    if hits: break
-                    # navigate base for next option
-                    d.get(URL); time.sleep(3)
-                  except Exception as ex:
-                    print("OPTION_ERR",repr(ex))
-                    d.get(URL); time.sleep(3)
-              else:
-                # Fallback with expediente + actor/demandado inputs if select is JS custom or absent.
-                print("NO_NATIVE_PATR_SELECT_FALLBACK")
-                for e in d.find_elements(By.CSS_SELECTOR,"input"):
-                  blob=" ".join([e.get_attribute("name") or "",e.get_attribute("id") or "",e.get_attribute("placeholder") or ""]).lower()
-                  if docket.startswith("0013") and "actor" in blob:
-                    e.clear();e.send_keys("SANTIAGO CALDERON CHAVEZ");print("SET_ACTOR",e.get_attribute("outerHTML")[:700]);break
-                  if docket.startswith("0012") and "actor" in blob:
-                    e.clear();e.send_keys("METAL Y PANEL INDUSTRIAL DEPOT");print("SET_ACTOR",e.get_attribute("outerHTML")[:700]);break
-                if click_search():
-                  time.sleep(3)
-                  hits=collect_target_rows(docket);print("FALLBACK_HIT_COUNT",len(hits))
-                  for tr,txt in hits:
-                    print("ROW_TEXT",txt);print("ROW_HTML",tr.get_attribute("outerHTML")[:14000]);print("VALID_RP","SSUP-RESPONSABILIDAD PATRIMONIAL" in txt)
+          try:
+            query("13/2026")
+            query("12/2026")
           finally:
             d.quit()
           PY
